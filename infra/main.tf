@@ -1,7 +1,7 @@
 
 ## DynamoDB Table
 ## TASK_SCHEDULER_TABLE
-## taskId | status | 
+## taskId | status | action | runAt | createdAt | updatedAt
 resource "aws_dynamodb_table" "task_scheduler_table" {
   name           = "TaskSchedulerTable"
   billing_mode   = "PAY_PER_REQUEST"
@@ -14,6 +14,11 @@ resource "aws_dynamodb_table" "task_scheduler_table" {
 
   attribute {
     name = "status"
+    type = "S"
+  }
+
+  attribute {
+    name = "action"
     type = "S"
   }
 
