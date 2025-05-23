@@ -1,40 +1,29 @@
-const AWS = require('aws-sdk')
-const { v4:uuidv4 } = require('uuid')
-const dynamoDB = AWS.DynamoDB.DocumentClient()
-const scheduler = AWS.Scheduler()
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBDocumentClient, PutCommand } = require("@aws-sdk/lib-dynamodb");
+const { v4: uuidv4 } = require('uuid');
 
-/*
-EXAMPLE REQUEST:
-POST /schedule-task
-Content-Type: application/json
-{
-    "action": "webhook",
-    "payload": {
-        "url": "https://example.com/notify",
-        "data": { "message": "Hello, this is your scheduled task!" }
-    },
-    "run_at": "2024-06-10T15:00:00Z"
-}
-*/
+// Initialize DynamoDB Client
+const client = new DynamoDBClient({});
+const dynamoDB = DynamoDBDocumentClient.from(client);
 
 exports.handler = async (event) => {
     try {
-        const requestBody = JSON.parse(event.body)
+        const requestBody = JSON.parse(event.body);
 
-        // validate request
+        // Validate request
         if (!requestBody.action || !requestBody.payload || !requestBody.runAt) {
             return {
                 statusCode: 400,
-                body: JSON.stringify({error: 'Missing required fields (action, payload or runAt'})
-            }
+                body: JSON.stringify({ error: 'Missing required fields (action, payload, or runAt)' })
+            };
         }
 
-        // generate task ID
-        const taskId = uuidv4()
-        const now = new Date().toISOString()
+        // Generate task ID
+        const taskId = uuidv4();
+        const now = new Date().toISOString();
 
-        // store task in dynamoDB
-        await dynamoDB.put({
+        // Store task in DynamoDB
+        await dynamoDB.send(new PutCommand({
             TableName: 'TaskSchedulerTable',
             Item: {
                 taskId,
@@ -45,23 +34,22 @@ exports.handler = async (event) => {
                 createdAt: now,
                 updatedAt: now,
             }
-        }).promise()
-    
+        }));
+
         return {
             statusCode: 201,
             body: JSON.stringify({ 
-              taskId,
-              message: 'Task scheduled successfully' 
+                taskId,
+                message: 'Task scheduled successfully' 
             })
-          }
-    }
-    catch (error){
+        };
+    } catch (error) {
         return {
             statusCode: 500,
             body: JSON.stringify({ 
                 message: 'Failed to schedule task',
-                error: error 
+                error: error.message 
             })
-        }
+        };
     }
-}
+};
