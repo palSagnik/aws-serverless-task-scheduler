@@ -66,7 +66,7 @@ exports.handler = async (event) => {
 
   try {
     // Fetch Task from DynamoDB
-    const task = getTaskDetails(taskId)
+    const task = await getTaskDetails(taskId)
     
     // Update taskStatus to running
     await updateTaskStatus(taskId, "running");

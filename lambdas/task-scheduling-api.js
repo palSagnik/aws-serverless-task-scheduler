@@ -40,16 +40,22 @@ exports.handler = async (event) => {
             }
         }));
 
+        const runAtWithoutTimezone = requestBody.runAt.replace('Z', '');
+
         // Create EventBridge schedule
         await schedulerClient.send(new CreateScheduleCommand({
             Name: `task-${taskId}`,
-            ScheduleExpression: `at(${requestBody.runAt})`,
+            ScheduleExpression: `at(${runAtWithoutTimezone})`,
             Target: {
                 Arn: process.env.TASK_EXECUTOR_ARN,
                 RoleArn: process.env.SCHEDULER_ROLE_ARN,
                 Input: JSON.stringify({ taskId })
+            },
+            FlexibleTimeWindow: {
+                Mode: 'OFF'
             }
-        }))
+        }));
+
         return {
             statusCode: 201,
             body: JSON.stringify({ 

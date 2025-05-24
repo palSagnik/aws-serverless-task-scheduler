@@ -1,4 +1,3 @@
-
 # DynamoDB Table
 # TASK_SCHEDULER_TABLE
 # taskId | status | action | payload | runAt | createdAt | updatedAt
@@ -71,7 +70,7 @@ data "aws_caller_identity" "current" {}
 resource "aws_iam_policy" "dynamodb-task-schedule-role-policy" {
   name        = "dynamodb-task-schedule-role-policy"
   path        = "/"
-  description = "AWS IAM Policy for Lambda to Access Dynamo DB"
+  description = "AWS IAM Policy for Lambda to Access Dynamo DB and EventBridge Scheduler"
 
   policy = jsonencode(
     {
@@ -86,6 +85,21 @@ resource "aws_iam_policy" "dynamodb-task-schedule-role-policy" {
             "dynamodb:UpdateItem"
           ],
           "Resource" : "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        },
+        {
+          "Effect" : "Allow",
+          "Action" : [
+            "scheduler:CreateSchedule",
+            "scheduler:DeleteSchedule",
+            "scheduler:GetSchedule",
+            "scheduler:UpdateSchedule"
+          ],
+          "Resource" : "arn:aws:scheduler:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:schedule/default/*"
+        },
+        {
+          "Effect" : "Allow",
+          "Action" : "iam:PassRole",
+          "Resource" : aws_iam_role.eventbridge-scheduler-role.arn
         }
       ]
     }
