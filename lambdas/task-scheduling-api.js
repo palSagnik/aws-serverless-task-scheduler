@@ -1,10 +1,14 @@
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const { DynamoDBDocumentClient, PutCommand } = require("@aws-sdk/lib-dynamodb");
+const { SchedulerClient, CreateScheduleCommand } = require("@aws-sdk/client-scheduler")
 const { v4: uuidv4 } = require('uuid');
 
 // Initialize DynamoDB Client
 const client = new DynamoDBClient({});
 const dynamoDB = DynamoDBDocumentClient.from(client);
+
+// Initialize Scheduler Client
+const schedulerClient = new SchedulerClient({})
 
 exports.handler = async (event) => {
     try {
@@ -24,7 +28,7 @@ exports.handler = async (event) => {
 
         // Store task in DynamoDB
         await dynamoDB.send(new PutCommand({
-            TableName: 'TaskSchedulerTable',
+            TableName: process.env.TASK_TABLE_NAME,
             Item: {
                 taskId,
                 status: 'scheduled',
@@ -36,6 +40,16 @@ exports.handler = async (event) => {
             }
         }));
 
+        // Create EventBridge schedule
+        await schedulerClient.send(new CreateScheduleCommand({
+            Name: `task-${taskId}`,
+            ScheduleExpression: `at(${requestBody.runAt})`,
+            Target: {
+                Arn: process.env.TASK_EXECUTOR_ARN,
+                RoleArn: process.env.SCHEDULER_ROLE_ARN,
+                Input: JSON.stringify({ taskId })
+            }
+        }))
         return {
             statusCode: 201,
             body: JSON.stringify({ 

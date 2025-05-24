@@ -1,7 +1,7 @@
 
 # DynamoDB Table
 # TASK_SCHEDULER_TABLE
-# taskId | status | action | runAt | createdAt | updatedAt
+# taskId | status | action | payload | runAt | createdAt | updatedAt
 resource "aws_dynamodb_table" "task_scheduler_table" {
   name         = "TaskSchedulerTable"
   billing_mode = "PAY_PER_REQUEST"
@@ -40,8 +40,8 @@ output "dynamo_db_table_name" {
   value = aws_dynamodb_table.task_scheduler_table.name
 }
 
-# Lambda
-# Task Scheduler Lambda
+# Lambda Function
+# Task Scheduler
 resource "aws_iam_role" "task_schedule_lambda_role" {
   name = "task_schedule_lambda_role"
 
@@ -80,7 +80,6 @@ resource "aws_iam_policy" "dynamodb-task-schedule-role-policy" {
         {
           "Effect" : "Allow",
           "Action" : [
-            "dynamodb:GetItem",
             "dynamodb:Query",
             "dynamodb:Scan",
             "dynamodb:PutItem",
@@ -94,30 +93,36 @@ resource "aws_iam_policy" "dynamodb-task-schedule-role-policy" {
 }
 
 # IAM Role Policy Attachment
-resource "aws_iam_role_policy_attachment" "attach-policy-to-role" {
+resource "aws_iam_role_policy_attachment" "attach-task-schedule-policy-to-role" {
   role       = aws_iam_role.task_schedule_lambda_role.name
   policy_arn = aws_iam_policy.dynamodb-task-schedule-role-policy.arn
 }
 
 # Zip File
-data "archive_file" "zip-code" {
+data "archive_file" "task-schedule-zip" {
   type        = "zip"
   source_dir  = "${path.module}/lambdas/"
   output_path = "${path.module}/lambdas/task-scheduling-func.zip"
 }
 
 # handler for lambda function
-resource "aws_lambda_function" "lambda_handler" {
+resource "aws_lambda_function" "task_scheduling_lambda_handler" {
   function_name = "task-scheduling-lambda-handler"
 
   filename   = "${path.module}/lambdas/task-scheduling-func.zip"
   role       = aws_iam_role.task_schedule_lambda_role.arn
   handler    = "task-scheduling-api.handler"
   runtime    = "nodejs18.x"
-  depends_on = [aws_iam_role_policy_attachment.attach-policy-to-role]
+  depends_on = [aws_iam_role_policy_attachment.attach-task-schedule-policy-to-role]
   environment {
     variables = {
-      databaseName = "TaskSchedulerTable"
+      TASK_TABLE_NAME = aws_dynamodb_table.task_scheduler_table.name
+
+      # Task Executor Lambda Arn
+      TASK_EXECUTOR_ARN = aws_lambda_function.task_executing_lambda_handler.arn
+
+      # EventBridge scheduler role ARN
+      SCHEDULER_ROLE_ARN = aws_iam_role.eventbridge-scheduler-role.arn
     }
   }
 }
@@ -152,7 +157,7 @@ resource "aws_apigatewayv2_stage" "init" {
 # API Gateway Integration
 resource "aws_apigatewayv2_integration" "task-schedule-api-integration" {
   api_id             = aws_apigatewayv2_api.task-schedule-api.id
-  integration_uri    = aws_lambda_function.lambda_handler.invoke_arn
+  integration_uri    = aws_lambda_function.task_scheduling_lambda_handler.invoke_arn
   integration_type   = "AWS_PROXY"
   integration_method = "POST"
 }
@@ -168,7 +173,7 @@ resource "aws_apigatewayv2_route" "task-schedule-api-route" {
 resource "aws_lambda_permission" "api-gw-perms" {
   statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.lambda_handler.function_name
+  function_name = aws_lambda_function.task_scheduling_lambda_handler.function_name
   principal     = "apigateway.amazonaws.com"
 
   source_arn = "${aws_apigatewayv2_api.task-schedule-api.execution_arn}/*"
@@ -177,3 +182,134 @@ resource "aws_lambda_permission" "api-gw-perms" {
 output "apigw-public-url" {
   value = "${aws_apigatewayv2_stage.init.invoke_url}/schedule-task"
 }
+
+# Lambda Function
+# Task Executor
+resource "aws_iam_policy" "dynamodb-task-execute-role-policy" {
+  name        = "dynamodb-task-execute-role-policy"
+  path        = "/"
+  description = "AWS IAM Policy for Lambda to Access Dynamo DB"
+
+  policy = jsonencode(
+    {
+      "Version" : "2012-10-17",
+      "Statement" : [
+        {
+          "Effect" : "Allow",
+          "Action" : [
+            "dynamodb:GetItem",
+            "dynamodb:UpdateItem"
+          ],
+          "Resource" : "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        }
+      ]
+    }
+  )
+}
+
+resource "aws_iam_role" "task_execute_lambda_role" {
+  name = "task_execute_lambda_role"
+
+  assume_role_policy = jsonencode(
+    {
+      "Version" : "2012-10-17",
+      "Statement" : [
+        {
+          "Effect" : "Allow",
+          "Action" : "sts:AssumeRole",
+          "Principal" : {
+            "Service" : "lambda.amazonaws.com"
+          },
+        }
+      ]
+    }
+  )
+}
+
+# IAM Role Policy Attachment
+resource "aws_iam_role_policy_attachment" "attach-task-execute-policy-to-role" {
+  role       = aws_iam_role.task_execute_lambda_role.name
+  policy_arn = aws_iam_policy.dynamodb-task-execute-role-policy.arn
+}
+
+# Zip File
+data "archive_file" "task-execute-zip" {
+  type        = "zip"
+  source_dir  = "${path.module}/lambdas/"
+  output_path = "${path.module}/lambdas/task-executor-func.zip"
+}
+
+# handler for lambda function
+resource "aws_lambda_function" "task_executing_lambda_handler" {
+  function_name = "task-executing-lambda-handler"
+
+  filename   = "${path.module}/lambdas/task-executor-func.zip"
+  role       = aws_iam_role.task_execute_lambda_role.arn
+  handler    = "task-executor.handler"
+  runtime    = "nodejs18.x"
+  depends_on = [aws_iam_role_policy_attachment.attach-task-execute-policy-to-role]
+  environment {
+    variables = {
+      TASK_TABLE_NAME = aws_dynamodb_table.task_scheduler_table.name
+    }
+  }
+}
+
+# EventBridge
+# Scheduler
+resource "aws_iam_role" "eventbridge-scheduler-role" {
+  name = "eventbridge-scheduler-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect = "Allow",
+      Action = "sts:AssumeRole"
+      Principal = {
+        Service = "scheduler.amazonaws.com"
+      },
+    }]
+  })
+}
+
+resource "aws_scheduler_schedule" "eventbridge_task_scheduler" {
+  name       = "eventbridge_task_scheduler"
+  group_name = "default"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  schedule_expression = "rate(5minutes)"
+
+  target {
+    arn      = aws_lambda_function.task_executing_lambda_handler.arn
+    role_arn = aws_iam_role.eventbridge-scheduler-role.arn
+  }
+}
+
+resource "aws_iam_role_policy" "eventbridge_scheduler_lambda" {
+  name = "eventbridge-lambda-invoke"
+  role = aws_iam_role.eventbridge-scheduler-role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = ["lambda:InvokeFunction"],
+        Resource = aws_lambda_function.task_executing_lambda_handler.arn
+      }
+    ]
+  })
+}
+
+output "scheduler_role_arn" {
+  value = aws_iam_role.eventbridge-scheduler-role.arn
+}
+
+output "task_executor_arn" {
+  value = aws_lambda_function.task_executing_lambda_handler.arn
+}
+
+
